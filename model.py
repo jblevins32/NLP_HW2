@@ -43,6 +43,18 @@ def attention(query, key, value, mask=None, dropout=None):
     # TODO: Implement attention mechanism
     # YOUR CODE STARTS HERE
 
+    scores = torch.matmul(query, key.transpose(-2,-1)) / math.sqrt(key.size(-1))
+
+    # If mask is provided, apply it to the scores
+    if mask is not None:
+        scores = scores.masked_fill(mask == 0, float('-inf'))
+    attention_weights = F.softmax(scores, dim=-1)
+
+    # If dropout is provided, apply it to the attention weights
+    if dropout is not None:
+        attention_weights = dropout(attention_weights)
+    attented_values = torch.matmul(attention_weights, value)
+
     # YOUR CODE ENDS HERE
     return attented_values, attention_weights
 
@@ -59,12 +71,20 @@ def autoregressive_mask(size):
                       is False if i < j (i.e., mask out position j for position i) and True otherwise.
     """
     # Create a 3D tensor that has 'size' rows and 'size' columns, initialized to 1s
-    result = None
+
     # TODO: Implement autoregressive mask
+
     # YOUR CODE STARTS HERE
 
+    # Create mask
+    result = torch.ones(1, size, size, dtype=torch.bool)
+
+    # Fill the upper triangular part of the mask with False (where i<j)
+    result = torch.triu(result, diagonal=1)
+
     # YOUR CODE ENDS HERE
-    return result
+
+    return (result == False).to(torch.bool)
 
 
 class PositionalEncoding(nn.Module):
@@ -100,7 +120,23 @@ class PositionalEncoding(nn.Module):
         # TODO: Define the positional encoding class initialization
         # YOUR CODE STARTS HERE
 
-        # self.register_buffer("pe", pe)
+        self.dropout = nn.Dropout(p=dropout)
+
+        # Base positional encoding matrix
+        pe = torch.zeros(max_len, d_model)
+
+        position = torch.arange(0, max_len, dtype=torch.float).unsqueeze(1)
+
+        divide = torch.exp(torch.arange(0, d_model, 2).float() * (-math.log(10000.0) / d_model))
+
+        # Replace even and odd indices with sine and cosine, respectively
+        pe[:, 0::2] = torch.sin(position * divide)
+        pe[:, 1::2] = torch.cos(position * divide)
+
+        # Add a batch dimension to the positional encoding
+        pe = pe.unsqueeze(0)
+
+        self.register_buffer("pe", pe)
         # YOUR CODE ENDS HERE
 
     def forward(self, x):
@@ -121,12 +157,15 @@ class PositionalEncoding(nn.Module):
             Apply dropout after adding the positional encodings.
         """
         # Prevent gradient computations for positional encodings
-        out = None
+
         # TODO: Implement positional encoding forward pass
         # YOUR CODE STARTS HERE 
 
+        out = x + self.pe[:, :x.size(1), :]
+        out = self.dropout(out)
+
         # YOUR CODE ENDS HERE
-        return out
+        return out.requires_grad_(False)
 
 
 class Embeddings(nn.Module):
@@ -151,6 +190,10 @@ class Embeddings(nn.Module):
         # TODO: Define embedding layer class initialization
         # YOUR CODE STARTS HERE
 
+        self.d_model = d_model
+        self.vocab_size = vocab_size
+        self.embed = nn.Embedding(vocab_size, d_model)
+
         # YOUR CODE ENDS HERE
 
     def forward(self, x):
@@ -167,6 +210,8 @@ class Embeddings(nn.Module):
         out = None
         # TODO: Implement embedding forward pass
         # YOUR CODE STARTS HERE
+
+        out = self.embed(x) * math.sqrt(self.d_model)
 
         # YOUR CODE ENDS HERE
         return out 
@@ -216,6 +261,13 @@ class MultiHeadedAttention(nn.Module):
         # TODO: Define multi-headed attention class initialization
         # YOUR CODE STARTS HERE
 
+        self.d_k = d_model // h  # Dimension of each key/query/value vector per head
+        self.h = h  # Number of heads
+        self.d_model = d_model  # Total dimension of the model
+        self.linear_layers = clones(nn.Linear(d_model, d_model), 4)  # 4 linear layers for Q, K, V, and output
+        self.attn = None
+        self.dropout = nn.Dropout(p=dropout)  # Dropout layer for regularization
+
         # YOUR CODE ENDS HERE
 
     def forward(self, query, key, value, mask=None):
@@ -244,6 +296,20 @@ class MultiHeadedAttention(nn.Module):
         # TODO: Implement multi-headed attention forward pass
         # YOUR CODE STARTS HERE
 
+        batch_size, seq_len, _ = query.size()
+
+        # Linear projections
+        query = self.linear_layers[0](query).view(batch_size, seq_len, self.h, self.d_k).transpose(1, 2)
+        key = self.linear_layers[1](key).view(batch_size, seq_len, self.h, self.d_k).transpose(1, 2)
+        value = self.linear_layers[2](value).view(batch_size, seq_len, self.h, self.d_k).transpose(1, 2)
+
+        # Apply attention
+        out, self.attn = attention(query, key, value, mask=mask, dropout=self.dropout)
+
+        # Concatenate heads and apply final linear layer
+        out = out.transpose(1, 2).contiguous().view(batch_size, seq_len, self.h * self.d_k)
+        out = self.linear_layers[3](out)
+
         # YOUR CODE ENDS HERE
         return out
 
@@ -256,6 +322,15 @@ class MultiHeadedAttention(nn.Module):
         """
         # TODO: Implement setting weights and biases for all layers
         # YOUR CODE STARTS HERE
+
+        self.linear_layers[0].weight.data = weights[0]
+        self.linear_layers[0].bias.data = biases[0]
+        self.linear_layers[1].weight.data = weights[1]
+        self.linear_layers[1].bias.data = biases[1]
+        self.linear_layers[2].weight.data = weights[2]
+        self.linear_layers[2].bias.data = biases[2]
+        self.linear_layers[3].weight.data = weights[3]
+        self.linear_layers[3].bias.data = biases[3]
 
         # YOUR CODE ENDS HERE
 
@@ -284,6 +359,11 @@ class FeedForward(nn.Module):
         # TODO: Define the feedforward class initialization
         # YOUR CODE STARTS HERE
 
+        self.w_1 = nn.Linear(d_model, d_ff)  # First linear layer
+        self.w_2 = nn.Linear(d_ff, d_model)  # Second linear layer
+        self.dropout = nn.Dropout(p=dropout)  # Dropout layer for regularization
+        self.relu = nn.ReLU()  # ReLU activation function
+
         # YOUR CODE ENDS HERE
 
     def forward(self, x):
@@ -301,6 +381,11 @@ class FeedForward(nn.Module):
         # TODO: Implement the feedforward forward pass
         # YOUR CODE STARTS HERE
 
+        out = self.w_1(x)  # Apply first linear layer
+        out = self.relu(out)  # Apply ReLU activation
+        out = self.dropout(out)  # Apply dropout
+        out = self.w_2(out)  # Apply second linear layer
+
         # YOUR CODE ENDS HERE
         return out
     
@@ -315,6 +400,11 @@ class FeedForward(nn.Module):
         """
         # TODO: Implement setting weights and biases for all layers
         # YOUR CODE STARTS HERE
+
+        self.w_1.weight.data = weights[0]
+        self.w_1.bias.data = biases[0]
+        self.w_2.weight.data = weights[1]
+        self.w_2.bias.data = biases[1]
 
         # YOUR CODE ENDS HERE
 
@@ -339,6 +429,10 @@ class LayerNorm(nn.Module):
         # TODO: Define the layer normalization class initialization
         # YOUR CODE STARTS HERE
 
+        self.scale_param = nn.Parameter(torch.ones(features))  # Scale parameter
+        self.shift_param = nn.Parameter(torch.zeros(features)) # Shift parameter
+        self.eps = eps  # Small constant for numerical stability
+
         # YOUR CODE ENDS HERE
 
     def forward(self, x):
@@ -352,6 +446,9 @@ class LayerNorm(nn.Module):
         out = None
         # TODO: Implement the layer normalization forward pass
         # YOUR CODE STARTS HERE
+
+        out = (x - x.mean(dim=-1, keepdim=True)) / (x.std(dim=-1, keepdim=True) + self.eps)  # Normalize
+        out = self.scale_param * out + self.shift_param  # Scale and shift
 
         # YOUR CODE ENDS HERE
         return out
@@ -382,6 +479,10 @@ class ResidualStreamBlock(nn.Module):
         # TODO: Define the residual stream block class initialization
         # YOUR CODE STARTS HERE
 
+        self.norm = LayerNorm(size)  # Layer normalization for the input
+        self.dropout = nn.Dropout(p=dropout)  # Dropout layer for regularization
+        self.size = size  # Size of the input features, used for normalization
+
         # YOUR CODE ENDS HERE
 
     def forward(self, x, sublayer):
@@ -400,6 +501,18 @@ class ResidualStreamBlock(nn.Module):
         out = None
         # TODO: Implement the residual stream block forward pass
         # YOUR CODE STARTS HERE
+
+        # Normalize the input
+        normalized_input = self.norm(x)
+
+        # Apply the sublayer to the normalized input
+        sublayer_output = sublayer(normalized_input)
+
+        # Apply dropout to the sublayer output
+        sublayer_output = self.dropout(sublayer_output)
+
+        # Add the original input to the sublayer output (residual connection)
+        out = x + sublayer_output
 
         # YOUR CODE ENDS HERE
         return out
@@ -434,6 +547,12 @@ class EncoderBlock(nn.Module):
         # YOUR CODE STARTS HERE
 
         self.size = size
+        self.self_attn = self_attn
+        self.feedforward = feed_forward
+        self.dropout = dropout
+        self.residual = ResidualStreamBlock(size, dropout)
+
+
         # YOUR CODE ENDS HERE
 
     def forward(self, x, mask):
@@ -452,9 +571,18 @@ class EncoderBlock(nn.Module):
         out = None
         # TODO: Implement the encoder block forward pass
         # YOUR CODE STARTS HERE
+        query = x[:,:,0]
+        key = x[:,:,1]
+        value = x[:,:,2]
+
+        out1 = self.self_attn.forward(query,key,value)
+        out1 = self.residual.forward(x,out)
+        out2 = self.feedforward.forward(out1)
+        out2 = self.residual.forward(out1,out2)
+
 
         # YOUR CODE ENDS HERE
-        return out
+        return out2
 
 
 class Encoder(nn.Module):

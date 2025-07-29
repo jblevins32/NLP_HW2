@@ -246,6 +246,14 @@ class Batch:
         # TODO: Implement the make_std_mask function.
         # YOUR CODE STARTS HERE
 
+        # Mask padding tokens
+        pad_mask = (tgt != pad).unsqueeze(-2)
+
+        # Mask future words
+        future_mask = autoregressive_mask(tgt.size(-1)).to(tgt.device)
+        
+        # Combine masks
+        tgt_mask = pad_mask & future_mask
 
         # YOUR CODE ENDS HERE
         return tgt_mask
@@ -301,12 +309,26 @@ def collate_batch(batch_list,
 
     # initialize lists to hold processed data 
     src_list, tgt_list = [], []
-
-    src, tgt = None, None 
     
     # TODO: Implement the collate_batch function.
     # YOUR CODE STARTS HERE
+    for src, tgt in batch_list:
 
+        # Add start and end tokens
+        src = bs_id.tolist() + src.tolist() + eos_id.tolist()
+        tgt = bs_id.tolist() + tgt.tolist() + eos_id.tolist()
+
+        # Pad sequences to max_padding length
+        src = pad(torch.tensor(src, device=device), (0, max_padding - len(src)), value=PAD_ID)
+        tgt = pad(torch.tensor(tgt, device=device), (0, max_padding - len(tgt)), value=PAD_ID)
+
+        # Append to lists
+        src_list.append(src)
+        tgt_list.append(tgt)
+
+    # Stack the lists into tensors
+    src = torch.stack(src_list, dim=0)
+    tgt = torch.stack(tgt_list, dim=0)
 
     # YOUR CODE ENDS HERE
 
