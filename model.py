@@ -165,7 +165,7 @@ class PositionalEncoding(nn.Module):
         out = self.dropout(out)
 
         # YOUR CODE ENDS HERE
-        return out.requires_grad_(False)
+        return out.detach()
 
 
 class Embeddings(nn.Module):
@@ -296,18 +296,22 @@ class MultiHeadedAttention(nn.Module):
         # TODO: Implement multi-headed attention forward pass
         # YOUR CODE STARTS HERE
 
-        batch_size, seq_len, _ = query.size()
+        batch_size = query.size(0)
+        query_len = query.size(1)
+        key_len = key.size(1)
+        value_len = value.size(1)
 
         # Linear projections
-        query = self.linear_layers[0](query).view(batch_size, seq_len, self.h, self.d_k).transpose(1, 2)
-        key = self.linear_layers[1](key).view(batch_size, seq_len, self.h, self.d_k).transpose(1, 2)
-        value = self.linear_layers[2](value).view(batch_size, seq_len, self.h, self.d_k).transpose(1, 2)
+        query = self.linear_layers[0](query).view(batch_size, query_len, self.h, self.d_k).transpose(1, 2)
+        key = self.linear_layers[1](key).view(batch_size, key_len, self.h, self.d_k).transpose(1, 2)
+        value = self.linear_layers[2](value).view(batch_size, value_len, self.h, self.d_k).transpose(1, 2)
+
 
         # Apply attention
         out, self.attn = attention(query, key, value, mask=mask, dropout=self.dropout)
 
         # Concatenate heads and apply final linear layer
-        out = out.transpose(1, 2).contiguous().view(batch_size, seq_len, self.h * self.d_k)
+        out = out.transpose(1, 2).contiguous().view(batch_size, query_len, self.h * self.d_k)
         out = self.linear_layers[3](out)
 
         # YOUR CODE ENDS HERE
@@ -546,12 +550,11 @@ class EncoderBlock(nn.Module):
         # TODO: Define the encoder block class initialization
         # YOUR CODE STARTS HERE
 
-        self.size = size
+        self.size = size  # Size of the model
         self.self_attn = self_attn
-        self.feedforward = feed_forward
-        self.dropout = dropout
-        self.residual = ResidualStreamBlock(size, dropout)
-
+        self.feed_forward = feed_forward
+        self.residual_stream_block1 = ResidualStreamBlock(size, dropout)
+        self.residual_stream_block2 = ResidualStreamBlock(size, dropout)
 
         # YOUR CODE ENDS HERE
 
@@ -571,18 +574,14 @@ class EncoderBlock(nn.Module):
         out = None
         # TODO: Implement the encoder block forward pass
         # YOUR CODE STARTS HERE
-        query = x[:,:,0]
-        key = x[:,:,1]
-        value = x[:,:,2]
 
-        out1 = self.self_attn.forward(query,key,value)
-        out1 = self.residual.forward(x,out)
-        out2 = self.feedforward.forward(out1)
-        out2 = self.residual.forward(out1,out2)
+        # Apply self-attention
+        out = self.residual_stream_block1(x, lambda x: self.self_attn(x, x, x, mask))
 
+        out = self.residual_stream_block2(out, self.feed_forward)
 
         # YOUR CODE ENDS HERE
-        return out2
+        return out
 
 
 class Encoder(nn.Module):
@@ -611,6 +610,10 @@ class Encoder(nn.Module):
         # TODO: Define the encoder class initialization
         # YOUR CODE STARTS HERE
 
+        self.layers = clones(layer, n_blocks)  # Create a stack of N identical layers
+        self.norm = LayerNorm(layer.size)  # Normalization layer for the output of the encoder
+        self.size = layer.size
+
         # YOUR CODE ENDS HERE
 
     def forward(self, x, mask):
@@ -629,6 +632,10 @@ class Encoder(nn.Module):
         out = None
         # TODO: Implement the encoder forward pass
         # YOUR CODE STARTS HERE
+
+        for layer in self.layers:
+            x = layer(x, mask)
+        out = self.norm(x)  # Apply normalization to the output of the last layer
 
         # YOUR CODE ENDS HERE
         return out
@@ -667,6 +674,15 @@ class DecoderBlock(nn.Module):
         # TODO: Define the decoder block class initialization
         # YOUR CODE STARTS HERE
 
+        self.size = size  # Size of the model
+        self.self_attn = self_attn  # Self-attention mechanism
+        self.cross_attn = cross_attn  # Cross-attention mechanism
+        self.feed_forward = feed_forward  # Feed-forward network
+        self.residual_stream_block1 = ResidualStreamBlock(size, dropout)  # Residual stream block for self-attention
+        self.residual_stream_block2 = ResidualStreamBlock(size, dropout)  # Residual stream block for cross-attention
+        self.residual_stream_block3 = ResidualStreamBlock(size, dropout)  # Residual stream block for feed-forward
+
+
         # YOUR CODE ENDS HERE
 
     def forward(self, x, memory, src_mask, tgt_mask):
@@ -687,6 +703,15 @@ class DecoderBlock(nn.Module):
         out = None
         # TODO: Implement the decoder block forward pass
         # YOUR CODE STARTS HERE
+
+        # Apply self-attention
+        out = self.residual_stream_block1(x, lambda x: self.self_attn(x, x, x, tgt_mask))
+
+        # Apply cross-attention
+        out = self.residual_stream_block2(out, lambda x: self.cross_attn(x, memory, memory, src_mask))
+
+        # Apply feed-forward network
+        out = self.residual_stream_block3(out, self.feed_forward)
 
         # YOUR CODE ENDS HERE
         return out
@@ -719,6 +744,9 @@ class Decoder(nn.Module):
         # TODO: Define the decoder class initialization
         # YOUR CODE STARTS HERE
 
+        self.layers = nn.ModuleList([copy.deepcopy(layer) for _ in range(n_blocks)])
+        self.norm = nn.LayerNorm(layer.size)
+
         # YOUR CODE ENDS HERE
 
     def forward(self, x, memory, src_mask, tgt_mask):
@@ -740,6 +768,10 @@ class Decoder(nn.Module):
         out = None
         # TODO: Implement the decoder forward pass
         # YOUR CODE STARTS HERE
+
+        for layer in self.layers:
+            x = layer(x, memory, src_mask, tgt_mask)
+        out = self.norm(x)  # Apply normalization to the output of the last layer
 
         # YOUR CODE ENDS HERE
         return out
@@ -768,6 +800,9 @@ class Generator(nn.Module):
         # TODO: Define the generator class initialization
         # YOUR CODE STARTS HERE
 
+        self.linear = nn.Linear(d_model, vocab)  # Linear layer to project to vocabulary size
+        self.log_softmax = nn.LogSoftmax(dim=-1)  # Log softmax layer
+
         # YOUR CODE ENDS HERE
 
     def forward(self, x):
@@ -784,6 +819,9 @@ class Generator(nn.Module):
         # TODO: Implement the generator forward pass
         # YOUR CODE STARTS HERE
 
+        out = self.linear(x)  # Apply linear transformation to project to vocabulary size
+        out = self.log_softmax(out)  # Apply log softmax to get log probabilities
+
         # YOUR CODE ENDS HERE
         return out
     
@@ -796,6 +834,9 @@ class Generator(nn.Module):
         """
         # TODO: Implement setting weights and biases for the linear layer
         # YOUR CODE STARTS HERE
+
+        self.linear.weight.data = weight  # Set the weights of the linear layer
+        self.linear.bias.data = bias  # Set the biases of the linear layer
 
         # YOUR CODE ENDS HERE
 
@@ -829,6 +870,12 @@ class Transformer(nn.Module):
         # TODO: Define the transformer class initialization
         # YOUR CODE STARTS HERE
 
+        self.encoder = encoder  # The encoder module
+        self.decoder = decoder  # The decoder module
+        self.src_embed = src_embed  # Embedding layer for the source sequence
+        self.tgt_embed = tgt_embed  # Embedding layer for the target sequence
+        self.generator = generator  # Generator layer to produce output probabilities
+
         # YOUR CODE ENDS HERE
 
     def forward(self, src, tgt, src_mask, tgt_mask):
@@ -847,6 +894,15 @@ class Transformer(nn.Module):
         # TODO: Implement the transformer forward pass
         # YOUR CODE STARTS HERE
 
+        # Encode the source sequence
+        memory = self.encode(src, src_mask)
+
+        # Decode the target sequence
+        out = self.decode(memory, src_mask, tgt, tgt_mask)
+
+        # Pass the output through the generator
+        out = self.generator(out)
+
         # YOUR CODE ENDS HERE
         return out
 
@@ -862,6 +918,12 @@ class Transformer(nn.Module):
         out = None
         # TODO: Implement the encoding function
         # YOUR CODE STARTS HERE
+
+        # Embed the source sequence
+        src_embedded = self.src_embed(src)
+
+        # Pass through the encoder
+        out = self.encoder(src_embedded, src_mask)
 
         # YOUR CODE ENDS HERE
         return out
@@ -880,6 +942,12 @@ class Transformer(nn.Module):
         out = None
         # TODO: Implement the decoding function
         # YOUR CODE STARTS HERE
+
+        # Embed the target sequence
+        tgt_embedded = self.tgt_embed(tgt)
+
+        # Pass through the decoder
+        out = self.decoder(tgt_embedded, memory, src_mask, tgt_mask)
 
         # YOUR CODE ENDS HERE
         return out
