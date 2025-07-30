@@ -80,6 +80,20 @@ class LabelSmoothing(nn.Module):
 
         # TODO: Implement the forward pass for label smoothing.
         # YOUR CODE STARTS HERE
-        
+
+        # Create smoothed distribution tensor
+        smoothed_dist = model_output.data.clone()
+
+        # Fill the smoothed distribution with the smoothing value
+        smoothed_dist.fill_(self.smoothing / (self.vocab_size - 1))
+
+        # Set the confidence value for the target labels
+        smoothed_dist.scatter_(1, target.unsqueeze(1), self.confidence)
+
+        # Zero out the padding tokens
+        smoothed_dist.index_fill_(1, torch.tensor(self.padding_idx).to(target.device), 0.0)
+
+        loss = self.criterion(model_output, smoothed_dist)
+
         # YOUR CODE ENDS HERE
         return loss 

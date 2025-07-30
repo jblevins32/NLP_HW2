@@ -45,9 +45,13 @@ def attention(query, key, value, mask=None, dropout=None):
 
     scores = torch.matmul(query, key.transpose(-2,-1)) / math.sqrt(key.size(-1))
 
-    # If mask is provided, apply it to the scores
     if mask is not None:
-        scores = scores.masked_fill(mask == 0, float('-inf'))
+    # Ensure shape: [batch_size, 1, 1, seq_len_k]
+        if mask.dim() == 3:
+            mask = mask.unsqueeze(1)  # [64, 1, 1, 128]
+    scores = scores.masked_fill(mask == 0, float('-inf'))
+
+
     attention_weights = F.softmax(scores, dim=-1)
 
     # If dropout is provided, apply it to the attention weights
@@ -901,7 +905,7 @@ class Transformer(nn.Module):
         out = self.decode(memory, src_mask, tgt, tgt_mask)
 
         # Pass the output through the generator
-        out = self.generator(out)
+        # out = self.generator(out)
 
         # YOUR CODE ENDS HERE
         return out

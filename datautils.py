@@ -315,8 +315,15 @@ def collate_batch(batch_list,
     for src, tgt in batch_list:
 
         # Add start and end tokens
-        src = bs_id.tolist() + src.tolist() + eos_id.tolist()
-        tgt = bs_id.tolist() + tgt.tolist() + eos_id.tolist()
+        if isinstance(src, list):
+            src = bs_id.tolist() + src + eos_id.tolist()
+        else:
+            src = bs_id.tolist() + src.tolist() + eos_id.tolist()
+
+        if isinstance(tgt, list):
+            tgt = bs_id.tolist() + tgt + eos_id.tolist()
+        else:
+            tgt = bs_id.tolist() + tgt.tolist() + eos_id.tolist()
 
         # Pad sequences to max_padding length
         src = pad(torch.tensor(src, device=device), (0, max_padding - len(src)), value=PAD_ID)

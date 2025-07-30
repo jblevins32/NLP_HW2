@@ -180,7 +180,15 @@ def run_epoch(data_iter,
             # Work around the `accum_iter` parameter to accumulate gradients and update the model weights.
             # This will be evaluated in non-programming section
             # YOUR CODE STARTS HERE
-            pass # remove this line when you implement the code
+            
+            loss_per_token.backward()  # compute gradients
+
+            # gradient accumulation
+            if (batch_step + 1) % accum_iter == 0:
+                optimizer.step()  # update model weights
+                optimizer.zero_grad()  # zero out gradients
+                accum_step += 1
+
             # YOUR CODE ENDS HERE
 
         # update total loss and tokens
